@@ -5,21 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand" // ★ 追加: 乱数を生成するために必要
 	"net/http"
 	"os"
-	"sync" // ★ 追加: Goroutineの完了を待つために必要
+	"sync"
 	"time"
 )
 
-// --- 既存の /api/status 用の構造体 ---
+// --- 構造体定義 (変更なし) ---
 type StatusResponseData struct {
 	Message   string `json:"message"`
 	Status    string `json:"status"`
 	Language  string `json:"language"`
 	Timestamp string `json:"timestamp"`
 }
-
-// ★ 追加: /api/speed-test 用の新しい構造体 ---
 type SpeedTestResponseData struct {
 	SerialExecutionTime   string `json:"serialExecutionTime"`
 	ParallelExecutionTime string `json:"parallelExecutionTime"`
@@ -28,69 +27,65 @@ type SpeedTestResponseData struct {
 	Message               string `json:"message"`
 }
 
-// 1秒かかるダミーの重い処理
-func dummyTask(duration time.Duration) {
-	time.Sleep(duration)
+// ★ 修正: 処理時間にランダムな揺らぎを持たせる
+func dummyTask() {
+	// 950msをベースに、0〜100msのランダムな時間を加える (合計 950ms 〜 1049ms)
+	baseDuration := 950 * time.Millisecond
+	randomOffset := time.Duration(rand.Intn(100)) * time.Millisecond // 0 to 99
+	totalDuration := baseDuration + randomOffset
+	time.Sleep(totalDuration)
 }
 
-// --- 既存の /api/status 用のハンドラ ---
+// --- statusHandler (変更なし) ---
 func statusHandler(w http.ResponseWriter, r *http.Request) {
-	// CORS対応
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 	w.Header().Set("Content-Type", "application/json")
-
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-
 	data := StatusResponseData{
 		Message:   "Hello from Go Microservice!",
 		Status:    "Active",
 		Language:  "Go (Golang)",
 		Timestamp: time.Now().Format(time.RFC3339),
 	}
-
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
-// ★ 追加: /api/speed-test 用の新しいハンドラ ---
+// ★ 修正: speedTestHandler
 func speedTestHandler(w http.ResponseWriter, r *http.Request) {
-	// CORS対応
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 	w.Header().Set("Content-Type", "application/json")
-
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	const taskCount = 3                  // 実行するタスクの数
-	const taskDuration = 1 * time.Second // 1つのタスクにかかる時間
+	const taskCount = 3
 
 	// --- 1. 直列実行 ---
 	startSerial := time.Now()
 	for i := 0; i < taskCount; i++ {
-		dummyTask(taskDuration)
+		dummyTask() // 引数をなくす
 	}
 	serialDuration := time.Since(startSerial)
 
 	// --- 2. Goroutineを使った並行実行 ---
 	var wg sync.WaitGroup
-	wg.Add(taskCount) // WaitGroupにタスクの数をセット
-
+	wg.Add(taskCount)
 	startParallel := time.Now()
 	for i := 0; i < taskCount; i++ {
 		go func() {
-			defer wg.Done() // Goroutineが完了したらカウンタをデクリメント
-			dummyTask(taskDuration)
+			defer wg.Done()
+			dummyTask() // 引数をなくす
 		}()
 	}
-	wg.Wait() // すべてのGoroutineが完了するまで待機
+	wg.Wait()
 	parallelDuration := time.Since(startParallel)
 
 	// フロントエンドに返すレスポンスを作成
@@ -98,8 +93,8 @@ func speedTestHandler(w http.ResponseWriter, r *http.Request) {
 		SerialExecutionTime:   fmt.Sprintf("%.2f秒", serialDuration.Seconds()),
 		ParallelExecutionTime: fmt.Sprintf("%.2f秒", parallelDuration.Seconds()),
 		TaskCount:             taskCount,
-		TaskDuration:          taskDuration.String(),
-		Message:               fmt.Sprintf("%d個の「%s」かかる処理を実行しました。", taskCount, taskDuration.String()),
+		TaskDuration:          "約1秒",                                            // 表示を固定の文字列に変更
+		Message:               fmt.Sprintf("%d個の「約1秒」かかる処理を実行しました。", taskCount), // メッセージも変更
 	}
 
 	if err := json.NewEncoder(w).Encode(data); err != nil {
@@ -108,9 +103,11 @@ func speedTestHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// ルーティングの設定
+	// ★ 追加: 乱数のシードを初期化。これにより毎回異なる乱数が生成される
+	rand.New(rand.NewSource(time.Now().UnixNano()))
+
 	http.HandleFunc("/api/status", statusHandler)
-	http.HandleFunc("/api/speed-test", speedTestHandler) // ★ 追加: 新しいルート
+	http.HandleFunc("/api/speed-test", speedTestHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
